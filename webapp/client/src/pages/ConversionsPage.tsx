@@ -307,7 +307,7 @@ function AreaConverter() {
               </div>
             </div>
 
-            {!(arpMode && unit === "ha") && <ResultRow label="Hectares"  value={fmtFixed(m2 / HA_TO_M2, 6)}    unit="ha" />}
+            {!(unit === "ha" && !arpMode) && <ResultRow label="Hectares"  value={fmtFixed(m2 / HA_TO_M2, 6)}    unit="ha" />}
             <ResultRow label="m²"        value={fmtFixed(m2, 4)}                            unit="m²" />
             {!(arpMode && unit === "acres") && <ResultRow label="Acres"  value={fmtFixed(m2 / ACRE_TO_M2, 6)}  unit="ac" />}
             <ResultRow label="Roods"     value={fmtFixed(m2 / ROOD_TO_M2, 6)}               unit="ro" />

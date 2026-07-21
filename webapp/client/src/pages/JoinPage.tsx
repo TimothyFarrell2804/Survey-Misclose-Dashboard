@@ -1,8 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { useQuery, useMutation } from "@tanstack/react-query";
-import { queryClient, apiRequest } from "@/lib/queryClient";
 import { computeJoins, toCanvasPoints, labelOffset, fmtDist, ddToDMS } from "@/lib/join";
-import type { JoinSession, JoinPoint } from "@shared/schema";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
@@ -11,6 +8,51 @@ import {
   PlusCircle, FolderOpen, MapPin, Settings2, Pencil, Check, X,
   Navigation2
 } from "lucide-react";
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// LOCAL TYPES
+// ═══════════════════════════════════════════════════════════════════════════════
+
+interface JoinPoint {
+  id: number;
+  sessionId: number;
+  label: string;
+  easting: number;
+  northing: number;
+  order: number;
+}
+
+interface JoinSession {
+  id: number;
+  name: string;
+  scaleFactor: number;
+  createdAt: string;
+  points: JoinPoint[];
+}
+
+interface StorageData {
+  sessions: JoinSession[];
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// LOCALSTORAGE HELPERS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const STORAGE_KEY = "survey_cogo_joins";
+
+function loadData(): StorageData {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (raw) return JSON.parse(raw) as StorageData;
+  } catch {
+    // ignore parse errors
+  }
+  return { sessions: [] };
+}
+
+function saveData(data: StorageData): void {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+}
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // SVG SKETCH DIAGRAM
@@ -340,24 +382,23 @@ function PointCard({
 // ADD POINT FORM
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function AddPointForm({ sessionId, nextOrder }: { sessionId: number; nextOrder: number }) {
+function AddPointForm({
+  sessionId,
+  nextOrder,
+  onAdd,
+}: {
+  sessionId: number;
+  nextOrder: number;
+  onAdd: (point: Omit<JoinPoint, "id" | "sessionId">) => void;
+}) {
   const [label, setLabel] = useState("");
   const [easting, setEasting] = useState("");
   const [northing, setNorthing] = useState("");
+  const [isPending, setIsPending] = useState(false);
   const { toast } = useToast();
   const eastingRef = useRef<HTMLInputElement>(null);
   const northingRef = useRef<HTMLInputElement>(null);
   const labelRef = useRef<HTMLInputElement>(null);
-
-  const add = useMutation({
-    mutationFn: (data: object) => apiRequest("POST", `/api/joins/${sessionId}/points`, data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/joins", sessionId, "points"] });
-      setLabel(""); setEasting(""); setNorthing("");
-      setTimeout(() => labelRef.current?.focus(), 50);
-    },
-    onError: () => toast({ title: "Failed to add point", variant: "destructive" }),
-  });
 
   function handleAdd() {
     const e = parseFloat(easting);
@@ -366,7 +407,11 @@ function AddPointForm({ sessionId, nextOrder }: { sessionId: number; nextOrder: 
       toast({ title: "Enter valid easting and northing", variant: "destructive" });
       return;
     }
-    add.mutate({ label: label.trim(), easting: e, northing: n, order: nextOrder });
+    setIsPending(true);
+    onAdd({ label: label.trim(), easting: e, northing: n, order: nextOrder } as Omit<JoinPoint, "id" | "sessionId">);
+    setLabel(""); setEasting(""); setNorthing("");
+    setIsPending(false);
+    setTimeout(() => labelRef.current?.focus(), 50);
   }
 
   return (
@@ -417,7 +462,7 @@ function AddPointForm({ sessionId, nextOrder }: { sessionId: number; nextOrder: 
           />
         </div>
       </div>
-      <Button onClick={handleAdd} disabled={add.isPending} className="w-full gap-2 h-10" data-testid="button-add-point">
+      <Button onClick={handleAdd} disabled={isPending} className="w-full gap-2 h-10" data-testid="button-add-point">
         <Plus size={16} /> Add Point
       </Button>
     </div>
@@ -477,49 +522,56 @@ function ScaleFactorBadge({ session, onChange }: { session: JoinSession; onChang
 function JoinSessionView({ session, onBack }: { session: JoinSession; onBack: () => void }) {
   const { toast } = useToast();
   const [activeTab, setActiveTab] = useState<"points" | "diagram" | "results">("points");
-  const [currentSession, setCurrentSession] = useState(session);
-
-  const { data: points = [], isLoading } = useQuery<JoinPoint[]>({
-    queryKey: ["/api/joins", session.id, "points"],
-    queryFn: () => apiRequest("GET", `/api/joins/${session.id}/points`).then(r => r.json()),
+  const [currentSession, setCurrentSession] = useState<JoinSession>(() => {
+    // Load latest from storage to include any points
+    const data = loadData();
+    return data.sessions.find(s => s.id === session.id) ?? session;
   });
 
-  const updateSession = useMutation({
-    mutationFn: (data: object) => apiRequest("PATCH", `/api/joins/${session.id}`, data),
-    onSuccess: async (res) => {
-      const updated: JoinSession = await res.json();
-      setCurrentSession(updated);
-      queryClient.invalidateQueries({ queryKey: ["/api/joins"] });
-    },
-  });
+  const points = [...currentSession.points].sort((a, b) => a.order - b.order);
 
-  const deletePoint = useMutation({
-    mutationFn: (id: number) => apiRequest("DELETE", `/api/joins/points/${id}`),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/joins", session.id, "points"] }),
-    onError: () => toast({ title: "Failed to delete", variant: "destructive" }),
-  });
+  function persistSession(updated: JoinSession) {
+    const data = loadData();
+    const idx = data.sessions.findIndex(s => s.id === updated.id);
+    if (idx !== -1) {
+      data.sessions[idx] = updated;
+      saveData(data);
+    }
+    setCurrentSession({ ...updated });
+  }
 
-  const updatePoint = useMutation({
-    mutationFn: ({ id, data }: { id: number; data: object }) => apiRequest("PATCH", `/api/joins/points/${id}`, data),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/joins", session.id, "points"] }),
-  });
+  function handleUpdateScaleFactor(sf: number) {
+    persistSession({ ...currentSession, scaleFactor: sf });
+  }
 
-  const reorder = useMutation({
-    mutationFn: (orderedIds: number[]) => apiRequest("POST", `/api/joins/${session.id}/reorder`, { orderedIds }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/joins", session.id, "points"] }),
-  });
+  function handleAddPoint(point: Omit<JoinPoint, "id" | "sessionId">) {
+    const newPoint: JoinPoint = { ...point, id: Date.now(), sessionId: currentSession.id };
+    persistSession({ ...currentSession, points: [...currentSession.points, newPoint] });
+  }
+
+  function handleDeletePoint(id: number) {
+    persistSession({ ...currentSession, points: currentSession.points.filter(p => p.id !== id) });
+  }
+
+  function handleUpdatePoint(id: number, data: Partial<{ label: string; easting: number; northing: number }>) {
+    const updated = currentSession.points.map(p => p.id === id ? { ...p, ...data } : p);
+    persistSession({ ...currentSession, points: updated });
+  }
 
   function handleMoveUp(i: number) {
     if (i === 0) return;
-    const ids = points.map(p => p.id);
-    [ids[i - 1], ids[i]] = [ids[i], ids[i - 1]];
-    reorder.mutate(ids);
+    const sorted = [...points];
+    [sorted[i - 1], sorted[i]] = [sorted[i], sorted[i - 1]];
+    const reordered = sorted.map((p, idx) => ({ ...p, order: idx + 1 }));
+    persistSession({ ...currentSession, points: reordered });
   }
+
   function handleMoveDown(i: number) {
     if (i === points.length - 1) return;
-    const ids = points.map(p => p.id);
-    [ids[i], ids[i + 1]] = [ids[i + 1], ids[i]];
-    reorder.mutate(ids);
+    const sorted = [...points];
+    [sorted[i], sorted[i + 1]] = [sorted[i + 1], sorted[i]];
+    const reordered = sorted.map((p, idx) => ({ ...p, order: idx + 1 }));
+    persistSession({ ...currentSession, points: reordered });
   }
 
   const joins = computeJoins(points, currentSession.scaleFactor);
@@ -533,7 +585,7 @@ function JoinSessionView({ session, onBack }: { session: JoinSession; onBack: ()
   return (
     <div className="min-h-screen bg-background">
       {/* Header */}
-      <header className="sticky top-0 z-10 bg-background/95 backdrop-blur border-b border-border px-4 py-3">
+      <div className="sticky top-[72px] z-10 bg-background/95 backdrop-blur border-b border-border px-4 py-2">
         <div className="flex items-center gap-3">
           <button onClick={onBack} className="text-muted-foreground hover:text-foreground p-1 -ml-1" data-testid="button-back-join">
             <ArrowLeft size={20} />
@@ -542,7 +594,7 @@ function JoinSessionView({ session, onBack }: { session: JoinSession; onBack: ()
             <h1 className="font-semibold text-base truncate" data-testid="text-session-name">{currentSession.name}</h1>
             <p className="text-xs text-muted-foreground">{points.length} point{points.length !== 1 ? "s" : ""} · {joins.length} join{joins.length !== 1 ? "s" : ""}</p>
           </div>
-          <ScaleFactorBadge session={currentSession} onChange={sf => updateSession.mutate({ scaleFactor: sf })} />
+          <ScaleFactorBadge session={currentSession} onChange={handleUpdateScaleFactor} />
         </div>
 
         {/* Tabs */}
@@ -558,14 +610,10 @@ function JoinSessionView({ session, onBack }: { session: JoinSession; onBack: ()
             </button>
           ))}
         </div>
-      </header>
+      </div>
 
       <main className="px-4 py-4 max-w-lg mx-auto pb-32">
-        {isLoading ? (
-          <div className="flex justify-center py-12">
-            <div className="animate-spin rounded-full h-8 w-8 border-2 border-primary border-t-transparent" />
-          </div>
-        ) : activeTab === "points" ? (
+        {activeTab === "points" ? (
           <div className="flex flex-col gap-3">
             {points.map((pt, i) => (
               <PointCard
@@ -573,13 +621,13 @@ function JoinSessionView({ session, onBack }: { session: JoinSession; onBack: ()
                 point={pt}
                 index={i}
                 total={points.length}
-                onDelete={() => deletePoint.mutate(pt.id)}
+                onDelete={() => handleDeletePoint(pt.id)}
                 onMoveUp={() => handleMoveUp(i)}
                 onMoveDown={() => handleMoveDown(i)}
-                onUpdate={(data) => updatePoint.mutate({ id: pt.id, data })}
+                onUpdate={(data) => handleUpdatePoint(pt.id, data)}
               />
             ))}
-            <AddPointForm sessionId={session.id} nextOrder={points.length + 1} />
+            <AddPointForm sessionId={session.id} nextOrder={points.length + 1} onAdd={handleAddPoint} />
           </div>
         ) : activeTab === "diagram" ? (
           <div className="flex flex-col gap-4">
@@ -628,32 +676,34 @@ function JoinSessionView({ session, onBack }: { session: JoinSession; onBack: ()
 function JoinSessionList({ onSelect }: { onSelect: (s: JoinSession) => void }) {
   const [newName, setNewName] = useState("");
   const { toast } = useToast();
+  const [sessions, setSessions] = useState<JoinSession[]>(() => loadData().sessions);
 
-  const { data: sessions = [], isLoading } = useQuery<JoinSession[]>({
-    queryKey: ["/api/joins"],
-    queryFn: () => apiRequest("GET", "/api/joins").then(r => r.json()),
-  });
-
-  const create = useMutation({
-    mutationFn: (name: string) => apiRequest("POST", "/api/joins", { name, scaleFactor: 1.0 }),
-    onSuccess: async (res) => {
-      queryClient.invalidateQueries({ queryKey: ["/api/joins"] });
-      setNewName("");
-      const data: JoinSession = await res.json();
-      onSelect(data);
-    },
-    onError: () => toast({ title: "Failed to create session", variant: "destructive" }),
-  });
-
-  const del = useMutation({
-    mutationFn: (id: number) => apiRequest("DELETE", `/api/joins/${id}`),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/joins"] }),
-    onError: () => toast({ title: "Failed to delete", variant: "destructive" }),
-  });
+  function refreshSessions() {
+    setSessions(loadData().sessions);
+  }
 
   function handleCreate() {
-    const name = newName.trim() || `Join ${sessions.length + 1}`;
-    create.mutate(name);
+    const data = loadData();
+    const name = newName.trim() || `Join ${data.sessions.length + 1}`;
+    const newSession: JoinSession = {
+      id: Date.now(),
+      name,
+      scaleFactor: 1.0,
+      createdAt: new Date().toISOString(),
+      points: [],
+    };
+    data.sessions.push(newSession);
+    saveData(data);
+    setNewName("");
+    refreshSessions();
+    onSelect(newSession);
+  }
+
+  function handleDelete(id: number) {
+    const data = loadData();
+    data.sessions = data.sessions.filter(s => s.id !== id);
+    saveData(data);
+    refreshSessions();
   }
 
   return (
@@ -672,7 +722,7 @@ function JoinSessionList({ onSelect }: { onSelect: (s: JoinSession) => void }) {
             onKeyDown={e => e.key === "Enter" && handleCreate()}
             data-testid="input-join-session-name"
           />
-          <Button onClick={handleCreate} disabled={create.isPending} className="gap-1.5 shrink-0" data-testid="button-create-join-session">
+          <Button onClick={handleCreate} className="gap-1.5 shrink-0" data-testid="button-create-join-session">
             <Plus size={16} /> Create
           </Button>
         </div>
@@ -682,11 +732,7 @@ function JoinSessionList({ onSelect }: { onSelect: (s: JoinSession) => void }) {
       <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2 flex items-center gap-1">
         <FolderOpen size={11} /> Saved Sessions
       </div>
-      {isLoading ? (
-        <div className="flex justify-center py-8">
-          <div className="animate-spin rounded-full h-6 w-6 border-2 border-primary border-t-transparent" />
-        </div>
-      ) : sessions.length === 0 ? (
+      {sessions.length === 0 ? (
         <div className="text-center py-8 text-muted-foreground">
           <Navigation2 size={32} className="mx-auto mb-2 opacity-30" />
           <p className="text-sm">No join sessions yet</p>
@@ -709,7 +755,7 @@ function JoinSessionList({ onSelect }: { onSelect: (s: JoinSession) => void }) {
               </div>
               <button
                 className="text-muted-foreground hover:text-destructive p-1.5 rounded-lg"
-                onClick={e => { e.stopPropagation(); del.mutate(s.id); }}
+                onClick={e => { e.stopPropagation(); handleDelete(s.id); }}
                 data-testid={`button-delete-join-${s.id}`}
               >
                 <Trash2 size={15} />

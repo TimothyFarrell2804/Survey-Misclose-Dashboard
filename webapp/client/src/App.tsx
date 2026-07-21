@@ -6,15 +6,20 @@ import TraversePage from "@/pages/TraversePage";
 import JoinPage from "@/pages/JoinPage";
 import ConversionsPage from "@/pages/ConversionsPage";
 import RadiationPage from "@/pages/RadiationPage";
+import CompiledSurveyPage from "@/pages/CompiledSurveyPage";
 
-type Tab = "traverse" | "join" | "conversions" | "radiation";
+type Tab = "traverse" | "join" | "conversions" | "radiation" | "compiled";
 
 function BottomNav({ active, onChange }: { active: Tab; onChange: (t: Tab) => void }) {
+  const navStyle = { background: "#2D3580", borderTop: "1px solid rgba(255,255,255,0.12)" };
+  const activeStyle = { color: "#3A7EC4" };
+  const inactiveStyle = { color: "rgba(255,255,255,0.55)" };
   return (
-    <nav className="fixed bottom-0 inset-x-0 z-50 bg-background/95 backdrop-blur border-t border-border safe-area-bottom">
+    <nav className="fixed bottom-0 inset-x-0 z-50 safe-area-bottom" style={navStyle}>
       <div className="flex max-w-lg mx-auto">
         <button
-          className={`flex-1 flex flex-col items-center gap-0.5 py-3 text-xs font-medium transition-colors ${active === "traverse" ? "text-primary" : "text-muted-foreground"}`}
+          className="flex-1 flex flex-col items-center gap-0.5 py-3 text-xs font-medium transition-colors"
+          style={active === "traverse" ? activeStyle : inactiveStyle}
           onClick={() => onChange("traverse")}
           data-testid="nav-traverse"
         >
@@ -26,7 +31,8 @@ function BottomNav({ active, onChange }: { active: Tab; onChange: (t: Tab) => vo
           Traverse
         </button>
         <button
-          className={`flex-1 flex flex-col items-center gap-0.5 py-3 text-xs font-medium transition-colors ${active === "join" ? "text-primary" : "text-muted-foreground"}`}
+          className="flex-1 flex flex-col items-center gap-0.5 py-3 text-xs font-medium transition-colors"
+          style={active === "join" ? activeStyle : inactiveStyle}
           onClick={() => onChange("join")}
           data-testid="nav-join"
         >
@@ -40,7 +46,8 @@ function BottomNav({ active, onChange }: { active: Tab; onChange: (t: Tab) => vo
           Join
         </button>
         <button
-          className={`flex-1 flex flex-col items-center gap-0.5 py-3 text-xs font-medium transition-colors ${active === "conversions" ? "text-primary" : "text-muted-foreground"}`}
+          className="flex-1 flex flex-col items-center gap-0.5 py-3 text-xs font-medium transition-colors"
+          style={active === "conversions" ? activeStyle : inactiveStyle}
           onClick={() => onChange("conversions")}
           data-testid="nav-conversions"
         >
@@ -55,7 +62,8 @@ function BottomNav({ active, onChange }: { active: Tab; onChange: (t: Tab) => vo
           Convert
         </button>
         <button
-          className={`flex-1 flex flex-col items-center gap-0.5 py-3 text-xs font-medium transition-colors ${active === "radiation" ? "text-primary" : "text-muted-foreground"}`}
+          className="flex-1 flex flex-col items-center gap-0.5 py-3 text-xs font-medium transition-colors"
+          style={active === "radiation" ? activeStyle : inactiveStyle}
           onClick={() => onChange("radiation")}
           data-testid="nav-radiation"
         >
@@ -73,6 +81,23 @@ function BottomNav({ active, onChange }: { active: Tab; onChange: (t: Tab) => vo
           </svg>
           Radiation
         </button>
+        <button
+          className="flex-1 flex flex-col items-center gap-0.5 py-3 text-xs font-medium transition-colors"
+          style={active === "compiled" ? activeStyle : inactiveStyle}
+          onClick={() => onChange("compiled")}
+          data-testid="nav-compiled"
+        >
+          <svg width="22" height="22" viewBox="0 0 22 22" fill="none">
+            {/* Document with checkmark */}
+            <rect x="3" y="2" width="13" height="17" rx="2" stroke="currentColor" strokeWidth="1.7" fill="none"/>
+            <line x1="6" y1="7" x2="13" y2="7" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/>
+            <line x1="6" y1="10" x2="13" y2="10" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/>
+            <line x1="6" y1="13" x2="10" y2="13" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/>
+            <circle cx="17" cy="16" r="4" fill="currentColor" fillOpacity="0.15" stroke="currentColor" strokeWidth="1.4"/>
+            <polyline points="15,16 16.5,17.5 19,14.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" fill="none"/>
+          </svg>
+          Compiled
+        </button>
       </div>
     </nav>
   );
@@ -83,25 +108,34 @@ function AppShell() {
 
   return (
     <>
-      {/* Shared header across both tools */}
-      <header className="sticky top-0 z-20 bg-background border-b border-border px-4 py-3 flex items-center gap-3">
-        <svg width="28" height="28" viewBox="0 0 32 32" fill="none" aria-label="TraverseCalc logo" className="shrink-0">
-          <rect width="32" height="32" rx="8" fill="hsl(var(--primary))" />
-          <polyline points="6,22 13,10 20,16 26,8" stroke="white" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" fill="none" />
-          <circle cx="6" cy="22" r="2" fill="white" />
-          <circle cx="26" cy="8" r="2" fill="white" />
-        </svg>
-        <div>
-          <div className="text-base font-bold leading-tight text-foreground">Survey COGO</div>
-          <div className="text-xs text-muted-foreground">
-            {tab === "traverse" ? "Misclose & Precision" : tab === "join" ? "Join Calculator" : tab === "conversions" ? "Unit Conversions" : "Radiation"}
-          </div>
+      {/* Treasco branded header */}
+      <header className="sticky top-0 z-20 border-b border-border" style={{ background: "#2D3580" }}>
+        {/* Logo bar */}
+        <div className="px-4 pt-3 pb-2 flex items-center justify-between">
+          <img
+            src="./treasco-logo.jpg"
+            alt="Treasco Surveyors"
+            className="h-8 w-auto"
+            style={{ filter: "brightness(0) invert(1)" }}
+          />
+          <span
+            className="text-xs font-semibold tracking-widest uppercase"
+            style={{ color: "#3A7EC4", letterSpacing: "0.12em" }}
+          >
+            Survey COGO
+          </span>
+        </div>
+        {/* Active tab label */}
+        <div className="px-4 pb-2">
+          <span className="text-xs" style={{ color: "rgba(255,255,255,0.65)" }}>
+            {tab === "traverse" ? "Misclose & Precision" : tab === "join" ? "Join Calculator" : tab === "conversions" ? "Unit Conversions" : tab === "radiation" ? "Radiation" : "Compiled Survey"}
+          </span>
         </div>
       </header>
 
       {/* Page content */}
       <div className="pb-20">
-        {tab === "traverse" ? <TraversePage hideHeader /> : tab === "join" ? <JoinPage /> : tab === "conversions" ? <ConversionsPage /> : <RadiationPage />}
+        {tab === "traverse" ? <TraversePage hideHeader /> : tab === "join" ? <JoinPage /> : tab === "conversions" ? <ConversionsPage /> : tab === "radiation" ? <RadiationPage /> : <CompiledSurveyPage />}
       </div>
 
       <BottomNav active={tab} onChange={setTab} />

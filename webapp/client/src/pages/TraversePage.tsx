@@ -1,8 +1,5 @@
-import { useState, useRef } from "react";
-import { useQuery, useMutation } from "@tanstack/react-query";
-import { queryClient, apiRequest } from "@/lib/queryClient";
+import { useState, useEffect, useRef } from "react";
 import { computeTraverse, formatBearingDMS, bearingToDMS } from "@/lib/traverse";
-import type { Traverse, Leg } from "@shared/schema";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -13,6 +10,45 @@ import {
   BarChart2, AlertTriangle, CheckCircle2, XCircle, Info, PlusCircle, FolderOpen,
   Navigation, Ruler, ArrowLeft
 } from "lucide-react";
+
+// ===================== LOCAL TYPES =====================
+interface Leg {
+  id: number;
+  traverseId: number;
+  bearingDeg: number;
+  bearingMin: number;
+  bearingSec: number;
+  distance: number;
+  order: number;
+}
+
+interface Traverse {
+  id: number;
+  name: string;
+  createdAt: string;
+  legs: Leg[];
+}
+
+interface StorageData {
+  traverses: Traverse[];
+}
+
+// ===================== LOCALSTORAGE HELPERS =====================
+const STORAGE_KEY = "survey_cogo_traverses";
+
+function loadData(): StorageData {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (raw) return JSON.parse(raw) as StorageData;
+  } catch {
+    // ignore parse errors
+  }
+  return { traverses: [] };
+}
+
+function saveData(data: StorageData): void {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+}
 
 // ===================== TYPES =====================
 interface LegFormState {
@@ -189,23 +225,21 @@ function LegCard({
 }
 
 // ===================== ADD TRAVERSE LINE FORM =====================
-function AddLegForm({ traverseId, nextOrder }: { traverseId: number; nextOrder: number }) {
+function AddLegForm({
+  traverseId,
+  nextOrder,
+  onAdd,
+}: {
+  traverseId: number;
+  nextOrder: number;
+  onAdd: (leg: Omit<Leg, "id" | "traverseId">) => void;
+}) {
   const [form, setForm] = useState<LegFormState>(DEFAULT_LEG);
+  const [isPending, setIsPending] = useState(false);
   const { toast } = useToast();
   const minRef = useRef<HTMLInputElement>(null);
   const secRef = useRef<HTMLInputElement>(null);
   const distRef = useRef<HTMLInputElement>(null);
-
-  const addLeg = useMutation({
-    mutationFn: (data: object) => apiRequest("POST", `/api/traverses/${traverseId}/legs`, data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/traverses", traverseId, "legs"] });
-      setForm(DEFAULT_LEG);
-      // refocus DEG after add
-      setTimeout(() => document.querySelector<HTMLInputElement>("[data-testid='input-new-deg']")?.focus(), 50);
-    },
-    onError: () => toast({ title: "Failed to add traverse line", variant: "destructive" }),
-  });
 
   function handleAdd() {
     const deg = parseInt(form.bearingDeg) || 0;
@@ -220,10 +254,11 @@ function AddLegForm({ traverseId, nextOrder }: { traverseId: number; nextOrder: 
       toast({ title: "Check bearing values (DEG 0-359, MIN/SEC 0-59)", variant: "destructive" });
       return;
     }
-    addLeg.mutate({
-      bearingDeg: deg, bearingMin: min, bearingSec: sec,
-      distance: dist, order: nextOrder,
-    });
+    setIsPending(true);
+    onAdd({ bearingDeg: deg, bearingMin: min, bearingSec: sec, distance: dist, order: nextOrder });
+    setForm(DEFAULT_LEG);
+    setIsPending(false);
+    setTimeout(() => document.querySelector<HTMLInputElement>("[data-testid='input-new-deg']")?.focus(), 50);
   }
 
   return (
@@ -261,7 +296,7 @@ function AddLegForm({ traverseId, nextOrder }: { traverseId: number; nextOrder: 
         </div>
         <Button
           onClick={handleAdd}
-          disabled={addLeg.isPending}
+          disabled={isPending}
           className="mt-5 h-11 gap-1.5"
           data-testid="button-add-leg"
         >
@@ -273,8 +308,169 @@ function AddLegForm({ traverseId, nextOrder }: { traverseId: number; nextOrder: 
   );
 }
 
-// Wire refs from BearingInput to the ref objects in AddLegForm
-// (done via forwardRef for minRef/secRef — here we use data-testid approach above for simplicity)
+
+// ===================== TRAVERSE DIAGRAM =====================
+function TraverseDiagram({ legs }: { legs: Leg[] }) {
+  if (legs.length < 2) {
+    return (
+      <div className="text-center py-12 text-muted-foreground">
+        <Info size={32} className="mx-auto mb-2 opacity-40" />
+        <p className="text-sm">Add at least 2 traverse lines to see the diagram.</p>
+      </div>
+    );
+  }
+
+  // Build coordinate chain starting from origin (0,0)
+  const pts: { x: number; y: number }[] = [{ x: 0, y: 0 }];
+  for (const leg of legs) {
+    const ddRad = (leg.bearingDeg + leg.bearingMin / 60 + leg.bearingSec / 3600) * (Math.PI / 180);
+    const prev = pts[pts.length - 1];
+    pts.push({
+      x: prev.x + leg.distance * Math.sin(ddRad),
+      y: prev.y + leg.distance * Math.cos(ddRad),
+    });
+  }
+
+  // Canvas sizing
+  const PAD = 48;
+  const W = 320;
+  const H = 320;
+  const xs = pts.map(p => p.x);
+  const ys = pts.map(p => p.y);
+  const minX = Math.min(...xs), maxX = Math.max(...xs);
+  const minY = Math.min(...ys), maxY = Math.max(...ys);
+  const rangeX = maxX - minX || 1;
+  const rangeY = maxY - minY || 1;
+  const scale = Math.min((W - PAD * 2) / rangeX, (H - PAD * 2) / rangeY);
+
+  function toSvg(x: number, y: number) {
+    return {
+      sx: PAD + (x - minX) * scale,
+      sy: H - PAD - (y - minY) * scale,
+    };
+  }
+
+  const svgPts = pts.map(p => toSvg(p.x, p.y));
+  const last = svgPts[svgPts.length - 1];
+  const first = svgPts[0];
+
+  // Misclose vector (close back to start)
+  const miscloseX = pts[0].x - pts[pts.length - 1].x;
+  const miscloseY = pts[0].y - pts[pts.length - 1].y;
+  const miscloseLen = Math.sqrt(miscloseX * miscloseX + miscloseY * miscloseY);
+  const hasMisclose = miscloseLen > 0.001;
+
+  // Midpoint label helper
+  function midLabel(a: { sx: number; sy: number }, b: { sx: number; sy: number }, i: number) {
+    const mx = (a.sx + b.sx) / 2;
+    const my = (a.sy + b.sy) / 2;
+    const leg = legs[i];
+    const bearing = `${leg.bearingDeg}°${String(leg.bearingMin).padStart(2,"0")}'${String(leg.bearingSec).padStart(2,"0")}"`;
+    const dist = `${leg.distance.toFixed(2)}m`;
+    return { mx, my, bearing, dist };
+  }
+
+  // Arrow marker helper
+  function arrowHead(ax: number, ay: number, bx: number, by: number, color: string, id: string) {
+    const angle = Math.atan2(by - ay, bx - ax);
+    const len = 9;
+    const spread = 0.4;
+    const x1 = bx - len * Math.cos(angle - spread);
+    const y1 = by - len * Math.sin(angle - spread);
+    const x2 = bx - len * Math.cos(angle + spread);
+    const y2 = by - len * Math.sin(angle + spread);
+    return <polygon key={id} points={`${bx},${by} ${x1},${y1} ${x2},${y2}`} fill={color} />;
+  }
+
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="bg-card border border-border rounded-xl p-3 shadow-sm">
+        <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">Traverse Diagram</div>
+        <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ maxHeight: 340 }}>
+          {/* Grid lines */}
+          {[0.25, 0.5, 0.75].map((f, i) => (
+            <g key={i} stroke="#e5e7eb" strokeWidth="0.5">
+              <line x1={PAD} y1={PAD + f * (H - PAD * 2)} x2={W - PAD} y2={PAD + f * (H - PAD * 2)} />
+              <line x1={PAD + f * (W - PAD * 2)} y1={PAD} x2={PAD + f * (W - PAD * 2)} y2={H - PAD} />
+            </g>
+          ))}
+
+          {/* Traverse lines with arrows */}
+          {svgPts.slice(0, -1).map((a, i) => {
+            const b = svgPts[i + 1];
+            return (
+              <g key={i}>
+                <line x1={a.sx} y1={a.sy} x2={b.sx} y2={b.sy} stroke="#2D3580" strokeWidth="2" strokeLinecap="round" />
+                {arrowHead(a.sx, a.sy, b.sx, b.sy, "#2D3580", `arr-${i}`)}
+              </g>
+            );
+          })}
+
+          {/* Misclose dashed line */}
+          {hasMisclose && (
+            <g>
+              <line x1={last.sx} y1={last.sy} x2={first.sx} y2={first.sy}
+                stroke="#ef4444" strokeWidth="1.5" strokeDasharray="5,3" strokeLinecap="round" />
+              {arrowHead(last.sx, last.sy, first.sx, first.sy, "#ef4444", "arr-misclose")}
+            </g>
+          )}
+
+          {/* Points */}
+          {svgPts.map((p, i) => (
+            <g key={i}>
+              <circle cx={p.sx} cy={p.sy} r={i === 0 ? 6 : 4}
+                fill={i === 0 ? "#2D3580" : "#3A7EC4"} />
+              <text x={p.sx} y={p.sy - 8} textAnchor="middle"
+                fontSize="9" fontWeight="700" fill="#2D3580">
+                {i + 1}
+              </text>
+            </g>
+          ))}
+
+          {/* Bearing + distance mid-labels */}
+          {svgPts.slice(0, -1).map((a, i) => {
+            const b = svgPts[i + 1];
+            const { mx, my, bearing, dist } = midLabel(a, b, i);
+            // Offset label perpendicular to line
+            const angle = Math.atan2(b.sy - a.sy, b.sx - a.sx);
+            const ox = -Math.sin(angle) * 14;
+            const oy = Math.cos(angle) * 14;
+            return (
+              <g key={i}>
+                <text x={mx + ox} y={my + oy - 5} textAnchor="middle" fontSize="7.5" fill="#2D3580" fontWeight="600">{bearing}</text>
+                <text x={mx + ox} y={my + oy + 5} textAnchor="middle" fontSize="7.5" fill="#3A7EC4">{dist}</text>
+              </g>
+            );
+          })}
+
+          {/* North arrow */}
+          <g>
+            <line x1={W - 18} y1={H - 18} x2={W - 18} y2={H - 38} stroke="#2D3580" strokeWidth="2" strokeLinecap="round" />
+            <polygon points={`${W - 18},${H - 40} ${W - 21},${H - 32} ${W - 15},${H - 32}`} fill="#3A7EC4" />
+            <text x={W - 18} y={H - 43} textAnchor="middle" fontSize="9" fontWeight="700" fill="#2D3580">N</text>
+          </g>
+
+          {/* Start label */}
+          <text x={svgPts[0].sx} y={svgPts[0].sy + 16} textAnchor="middle" fontSize="8" fill="#2D3580" fontWeight="700">START</text>
+        </svg>
+      </div>
+
+      {/* Legend */}
+      <div className="bg-muted/40 rounded-xl px-3 py-2 text-xs text-muted-foreground flex flex-col gap-1">
+        <div className="flex items-center gap-2">
+          <svg width="20" height="8"><line x1="0" y1="4" x2="20" y2="4" stroke="#2D3580" strokeWidth="2"/></svg>
+          <span>Traverse lines (with bearing &amp; distance)</span>
+        </div>
+        {hasMisclose && (
+          <div className="flex items-center gap-2">
+            <svg width="20" height="8"><line x1="0" y1="4" x2="20" y2="4" stroke="#ef4444" strokeWidth="1.5" strokeDasharray="4,2"/></svg>
+            <span>Misclose vector (back to start)</span>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
 
 // ===================== RESULTS PANEL =====================
 function QualityBadge({ quality }: { quality: "excellent" | "good" | "fair" | "poor" }) {
@@ -382,76 +578,79 @@ function ResultsPanel({ legs }: { legs: Leg[] }) {
 // ===================== TRAVERSE VIEW =====================
 function TraverseView({ traverse, onBack }: { traverse: Traverse; onBack: () => void }) {
   const { toast } = useToast();
-  const [activeTab, setActiveTab] = useState<"legs" | "results">("legs");
-
-  const { data: legs = [], isLoading } = useQuery<Leg[]>({
-    queryKey: ["/api/traverses", traverse.id, "legs"],
-    queryFn: () => apiRequest("GET", `/api/traverses/${traverse.id}/legs`).then(r => r.json()),
+  const [activeTab, setActiveTab] = useState<"legs" | "results" | "diagram">("legs");
+  const [legs, setLegs] = useState<Leg[]>(() => {
+    const data = loadData();
+    const t = data.traverses.find(x => x.id === traverse.id);
+    return t ? [...t.legs].sort((a, b) => a.order - b.order) : [];
   });
 
-  const deleteLeg = useMutation({
-    mutationFn: (id: number) => apiRequest("DELETE", `/api/legs/${id}`),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/traverses", traverse.id, "legs"] }),
-    onError: () => toast({ title: "Failed to delete traverse line", variant: "destructive" }),
-  });
+  // Persist legs changes back into storage
+  function persistLegs(updatedLegs: Leg[]) {
+    const data = loadData();
+    const idx = data.traverses.findIndex(x => x.id === traverse.id);
+    if (idx !== -1) {
+      data.traverses[idx].legs = updatedLegs;
+      saveData(data);
+    }
+    setLegs([...updatedLegs]);
+  }
 
-  const updateLeg = useMutation({
-    mutationFn: ({ id, data }: { id: number; data: object }) => apiRequest("PATCH", `/api/legs/${id}`, data),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/traverses", traverse.id, "legs"] }),
-    onError: () => toast({ title: "Failed to update traverse line", variant: "destructive" }),
-  });
+  function handleAddLeg(leg: Omit<Leg, "id" | "traverseId">) {
+    const newLeg: Leg = { ...leg, id: Date.now(), traverseId: traverse.id };
+    const updated = [...legs, newLeg];
+    persistLegs(updated);
+  }
 
-  const reorderLegs = useMutation({
-    mutationFn: (orderedIds: number[]) =>
-      apiRequest("POST", `/api/traverses/${traverse.id}/reorder`, { orderedIds }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/traverses", traverse.id, "legs"] }),
-  });
+  function handleDeleteLeg(id: number) {
+    const updated = legs.filter(l => l.id !== id);
+    persistLegs(updated);
+  }
+
+  function handleUpdateLeg(leg: Leg, field: string, value: string) {
+    const numVal = field === "bearingDeg" || field === "bearingMin"
+      ? parseInt(value) || 0
+      : parseFloat(value) || 0;
+    const updated = legs.map(l => l.id === leg.id ? { ...l, [field]: numVal } : l);
+    persistLegs(updated);
+  }
 
   function handleMoveUp(index: number) {
     if (index === 0) return;
-    const ids = legs.map(l => l.id);
-    [ids[index - 1], ids[index]] = [ids[index], ids[index - 1]];
-    reorderLegs.mutate(ids);
+    const updated = [...legs];
+    [updated[index - 1], updated[index]] = [updated[index], updated[index - 1]];
+    // Re-assign order values
+    const reordered = updated.map((l, i) => ({ ...l, order: i + 1 }));
+    persistLegs(reordered);
   }
 
   function handleMoveDown(index: number) {
     if (index === legs.length - 1) return;
-    const ids = legs.map(l => l.id);
-    [ids[index], ids[index + 1]] = [ids[index + 1], ids[index]];
-    reorderLegs.mutate(ids);
-  }
-
-  function handleUpdate(leg: Leg, field: string, value: string) {
-    const numVal = field === "bearingDeg" || field === "bearingMin"
-      ? parseInt(value) || 0
-      : parseFloat(value) || 0;
-    updateLeg.mutate({ id: leg.id, data: { [field]: numVal } });
+    const updated = [...legs];
+    [updated[index], updated[index + 1]] = [updated[index + 1], updated[index]];
+    const reordered = updated.map((l, i) => ({ ...l, order: i + 1 }));
+    persistLegs(reordered);
   }
 
   const result = computeTraverse(legs);
 
   return (
     <div className="min-h-screen bg-background">
-      {/* Header */}
-      <header className="sticky top-0 z-10 bg-background/95 backdrop-blur border-b border-border px-4 py-3">
-        <div className="flex items-center gap-3">
+      {/* Sub-header: back + traverse name + tabs — sits below the Treasco header */}
+      <div className="sticky top-[72px] z-10 bg-background/95 backdrop-blur border-b border-border px-4 py-2">
+        <div className="flex items-center gap-2 mb-2">
           <button onClick={onBack} className="text-muted-foreground hover:text-foreground p-1 -ml-1" data-testid="button-back">
-            <ArrowLeft size={20} />
+            <ArrowLeft size={18} />
           </button>
           <div className="flex-1 min-w-0">
-            <h1 className="font-semibold text-base truncate" data-testid="text-traverse-name">{traverse.name}</h1>
-            <p className="text-xs text-muted-foreground">{legs.length} traverse line{legs.length !== 1 ? "s" : ""}</p>
+            <span className="font-semibold text-sm truncate" data-testid="text-traverse-name">{traverse.name}</span>
+            <span className="text-xs text-muted-foreground ml-2">{legs.length} line{legs.length !== 1 ? "s" : ""}</span>
           </div>
           {result && (
-            <div className="text-right shrink-0">
-              <div className="text-xs text-muted-foreground">Precision</div>
-              <div className="text-sm font-bold font-mono text-primary" data-testid="text-header-precision">{result.precisionStr}</div>
-            </div>
+            <span className="text-xs font-bold font-mono text-primary shrink-0" data-testid="text-header-precision">{result.precisionStr}</span>
           )}
         </div>
-
-        {/* Tabs */}
-        <div className="flex gap-1 mt-3 bg-muted rounded-lg p-1">
+        <div className="flex gap-1 bg-muted rounded-lg p-1">
           <button
             className={`flex-1 text-sm py-1.5 rounded-md font-medium transition-all ${activeTab === "legs" ? "bg-background shadow-sm text-foreground" : "text-muted-foreground"}`}
             onClick={() => setActiveTab("legs")}
@@ -466,15 +665,18 @@ function TraverseView({ traverse, onBack }: { traverse: Traverse; onBack: () => 
           >
             Results
           </button>
+          <button
+            className={`flex-1 text-sm py-1.5 rounded-md font-medium transition-all ${activeTab === "diagram" ? "bg-background shadow-sm text-foreground" : "text-muted-foreground"}`}
+            onClick={() => setActiveTab("diagram")}
+            data-testid="tab-diagram"
+          >
+            Diagram
+          </button>
         </div>
-      </header>
+      </div>
 
       <main className="px-4 py-4 max-w-lg mx-auto pb-32">
-        {isLoading ? (
-          <div className="flex justify-center py-12">
-            <div className="animate-spin rounded-full h-8 w-8 border-2 border-primary border-t-transparent" />
-          </div>
-        ) : activeTab === "legs" ? (
+        {activeTab === "legs" ? (
           <div className="flex flex-col gap-3">
             {legs.map((leg, i) => (
               <LegCard
@@ -482,16 +684,18 @@ function TraverseView({ traverse, onBack }: { traverse: Traverse; onBack: () => 
                 leg={leg}
                 index={i}
                 total={legs.length}
-                onDelete={() => deleteLeg.mutate(leg.id)}
+                onDelete={() => handleDeleteLeg(leg.id)}
                 onMoveUp={() => handleMoveUp(i)}
                 onMoveDown={() => handleMoveDown(i)}
-                onUpdate={(field, value) => handleUpdate(leg, field, value)}
+                onUpdate={(field, value) => handleUpdateLeg(leg, field, value)}
               />
             ))}
-            <AddLegForm traverseId={traverse.id} nextOrder={legs.length + 1} />
+            <AddLegForm traverseId={traverse.id} nextOrder={legs.length + 1} onAdd={handleAddLeg} />
           </div>
-        ) : (
+        ) : activeTab === "results" ? (
           <ResultsPanel legs={legs} />
+        ) : (
+          <TraverseDiagram legs={legs} />
         )}
       </main>
     </div>
@@ -502,32 +706,33 @@ function TraverseView({ traverse, onBack }: { traverse: Traverse; onBack: () => 
 function TraverseList({ onSelect, hideHeader }: { onSelect: (t: Traverse) => void; hideHeader?: boolean }) {
   const [newName, setNewName] = useState("");
   const { toast } = useToast();
+  const [traverses, setTraverses] = useState<Traverse[]>(() => loadData().traverses);
 
-  const { data: traverses = [], isLoading } = useQuery<Traverse[]>({
-    queryKey: ["/api/traverses"],
-    queryFn: () => apiRequest("GET", "/api/traverses").then(r => r.json()),
-  });
-
-  const createTraverse = useMutation({
-    mutationFn: (name: string) => apiRequest("POST", "/api/traverses", { name }),
-    onSuccess: async (res) => {
-      queryClient.invalidateQueries({ queryKey: ["/api/traverses"] });
-      setNewName("");
-      const data: Traverse = await res.json();
-      onSelect(data);
-    },
-    onError: () => toast({ title: "Failed to create traverse", variant: "destructive" }),
-  });
-
-  const deleteTraverse = useMutation({
-    mutationFn: (id: number) => apiRequest("DELETE", `/api/traverses/${id}`),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/traverses"] }),
-    onError: () => toast({ title: "Failed to delete", variant: "destructive" }),
-  });
+  function refreshTraverses() {
+    setTraverses(loadData().traverses);
+  }
 
   function handleCreate() {
-    const name = newName.trim() || `Traverse ${traverses.length + 1}`;
-    createTraverse.mutate(name);
+    const data = loadData();
+    const name = newName.trim() || `Traverse ${data.traverses.length + 1}`;
+    const newTraverse: Traverse = {
+      id: Date.now(),
+      name,
+      createdAt: new Date().toISOString(),
+      legs: [],
+    };
+    data.traverses.push(newTraverse);
+    saveData(data);
+    setNewName("");
+    refreshTraverses();
+    onSelect(newTraverse);
+  }
+
+  function handleDelete(id: number) {
+    const data = loadData();
+    data.traverses = data.traverses.filter(t => t.id !== id);
+    saveData(data);
+    refreshTraverses();
   }
 
   return (
@@ -547,7 +752,7 @@ function TraverseList({ onSelect, hideHeader }: { onSelect: (t: Traverse) => voi
               onKeyDown={(e) => e.key === "Enter" && handleCreate()}
               data-testid="input-traverse-name"
             />
-            <Button onClick={handleCreate} disabled={createTraverse.isPending} className="gap-1.5 shrink-0" data-testid="button-create-traverse">
+            <Button onClick={handleCreate} className="gap-1.5 shrink-0" data-testid="button-create-traverse">
               <Plus size={16} /> Create
             </Button>
           </div>
@@ -560,11 +765,7 @@ function TraverseList({ onSelect, hideHeader }: { onSelect: (t: Traverse) => voi
           </div>
         </div>
 
-        {isLoading ? (
-          <div className="flex justify-center py-8">
-            <div className="animate-spin rounded-full h-6 w-6 border-2 border-primary border-t-transparent" />
-          </div>
-        ) : traverses.length === 0 ? (
+        {traverses.length === 0 ? (
           <div className="text-center py-12 text-muted-foreground">
             <MapPin size={36} className="mx-auto mb-3 opacity-30" />
             <p className="text-sm font-medium">No traverses yet</p>
@@ -592,7 +793,7 @@ function TraverseList({ onSelect, hideHeader }: { onSelect: (t: Traverse) => voi
                 </div>
                 <button
                   className="text-muted-foreground hover:text-destructive p-1.5 rounded-lg"
-                  onClick={(e) => { e.stopPropagation(); deleteTraverse.mutate(t.id); }}
+                  onClick={(e) => { e.stopPropagation(); handleDelete(t.id); }}
                   data-testid={`button-delete-traverse-${t.id}`}
                 >
                   <Trash2 size={15} />
