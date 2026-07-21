@@ -7,8 +7,9 @@ import JoinPage from "@/pages/JoinPage";
 import ConversionsPage from "@/pages/ConversionsPage";
 import RadiationPage from "@/pages/RadiationPage";
 import CompiledSurveyPage from "@/pages/CompiledSurveyPage";
+import CrownPlanPage from "@/pages/CrownPlanPage";
 
-type Tab = "traverse" | "join" | "conversions" | "radiation" | "compiled";
+type Tab = "traverse" | "join" | "conversions" | "radiation" | "compiled" | "crownplan";
 
 function BottomNav({ active, onChange }: { active: Tab; onChange: (t: Tab) => void }) {
   const navStyle = { background: "#2D3580", borderTop: "1px solid rgba(255,255,255,0.12)" };
@@ -98,6 +99,23 @@ function BottomNav({ active, onChange }: { active: Tab; onChange: (t: Tab) => vo
           </svg>
           Compiled
         </button>
+        <button
+          className="flex-1 flex flex-col items-center gap-0.5 py-3 text-xs font-medium transition-colors"
+          style={active === "crownplan" ? activeStyle : inactiveStyle}
+          onClick={() => onChange("crownplan")}
+          data-testid="nav-crownplan"
+        >
+          <svg width="22" height="22" viewBox="0 0 22 22" fill="none">
+            {/* Magnifier over document */}
+            <rect x="2" y="2" width="12" height="15" rx="2" stroke="currentColor" strokeWidth="1.7" fill="none"/>
+            <line x1="5" y1="6.5" x2="11" y2="6.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
+            <line x1="5" y1="9.5" x2="11" y2="9.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
+            <line x1="5" y1="12.5" x2="8.5" y2="12.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
+            <circle cx="16" cy="16" r="4" stroke="currentColor" strokeWidth="1.5" fill="none"/>
+            <line x1="19" y1="19" x2="21" y2="21" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round"/>
+          </svg>
+          Plan Read
+        </button>
       </div>
     </nav>
   );
@@ -128,14 +146,14 @@ function AppShell() {
         {/* Active tab label */}
         <div className="px-4 pb-2">
           <span className="text-xs" style={{ color: "rgba(255,255,255,0.65)" }}>
-            {tab === "traverse" ? "Misclose & Precision" : tab === "join" ? "Join Calculator" : tab === "conversions" ? "Unit Conversions" : tab === "radiation" ? "Radiation" : "Compiled Survey"}
+            {tab === "traverse" ? "Misclose & Precision" : tab === "join" ? "Join Calculator" : tab === "conversions" ? "Unit Conversions" : tab === "radiation" ? "Radiation" : tab === "compiled" ? "Compiled Survey" : "Crown Plan Read"}
           </span>
         </div>
       </header>
 
       {/* Page content */}
       <div className="pb-20">
-        {tab === "traverse" ? <TraversePage hideHeader /> : tab === "join" ? <JoinPage /> : tab === "conversions" ? <ConversionsPage /> : tab === "radiation" ? <RadiationPage /> : <CompiledSurveyPage />}
+        {tab === "traverse" ? <TraversePage hideHeader /> : tab === "join" ? <JoinPage /> : tab === "conversions" ? <ConversionsPage /> : tab === "radiation" ? <RadiationPage /> : tab === "compiled" ? <CompiledSurveyPage /> : <CrownPlanPage />}
       </div>
 
       <BottomNav active={tab} onChange={setTab} />

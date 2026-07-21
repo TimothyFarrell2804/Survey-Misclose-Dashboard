@@ -1,5 +1,7 @@
 import type { Express } from "express";
 import type { Server } from "http";
+import multer from "multer";
+import Anthropic from "@anthropic-ai/sdk";
 import { storage } from "./storage";
 import { insertTraverseSchema, insertLegSchema, insertJoinSessionSchema, insertJoinPointSchema } from "@shared/schema";
 import { z } from "zod";
@@ -120,4 +122,83 @@ export function registerRoutes(httpServer: Server, app: Express) {
     storage.reorderJoinPoints(sessionId, orderedIds);
     res.json({ ok: true });
   });
+
+  // ── Crown Plan Interpretation ──────────────────────────────────────────────
+  const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
+
+  app.post("/api/interpret-plan", upload.single("plan"), async (req, res) => {
+    try {
+      if (!req.file) return res.status(400).json({ error: "No file uploaded" });
+
+      const client = new Anthropic();
+      const mime = req.file.mimetype as "image/jpeg" | "image/png" | "image/gif" | "image/webp";
+      const b64 = req.file.buffer.toString("base64");
+
+      // For PDFs, use document type; for images use image type
+      const isPdf = req.file.mimetype === "application/pdf";
+
+      const imageSource = isPdf
+        ? { type: "document" as const, source: { type: "base64" as const, media_type: "application/pdf" as const, data: b64 } }
+        : { type: "image" as const, source: { type: "base64" as const, media_type: mime, data: b64 } };
+
+      const prompt = `You are an expert Australian land surveyor specialising in NSW Crown portion plans. 
+Carefully examine this Crown portion plan image and extract ALL survey data visible.
+
+Return a JSON object with this exact structure:
+{
+  "planReference": { "value": "...", "confidence": "green|orange|red", "note": "..." },
+  "surveyorName": { "value": "...", "confidence": "green|orange|red", "note": "..." },
+  "surveyDate": { "value": "...", "confidence": "green|orange|red", "note": "..." },
+  "parish": { "value": "...", "confidence": "green|orange|red", "note": "..." },
+  "county": { "value": "...", "confidence": "green|orange|red", "note": "..." },
+  "lotNumber": { "value": "...", "confidence": "green|orange|red", "note": "..." },
+  "titleArea": { "value": "...", "confidence": "green|orange|red", "note": "...", "unit": "acres|hectares|m2" },
+  "boundaryLines": [
+    {
+      "lineNumber": 1,
+      "bearing": { "value": "DDD°MM'SS\"", "confidence": "green|orange|red", "note": "..." },
+      "distance": { "value": "...", "confidence": "green|orange|red", "note": "...", "unit": "links|metres|chains|feet" },
+      "adjoiningInfo": "..."
+    }
+  ],
+  "adjoiningParcels": [{ "label": "...", "confidence": "green|orange|red" }],
+  "generalNotes": "...",
+  "overallReadability": "green|orange|red"
 }
+
+Confidence ratings:
+- green: clearly legible, high confidence in the value
+- orange: partially legible or inferred from context, moderate confidence  
+- red: illegible, heavily degraded, or unreadable — include best guess if possible
+
+For bearings: use format DDD°MM'SS" (whole-circle bearings). Old plans may use quadrant bearings — convert to whole-circle.
+For distances: note the unit (links, chains, metres, feet). Old NSW plans typically use links.
+If a field is not present on this plan, use null for value.
+Return ONLY the JSON, no other text.`;
+
+      const message = await client.messages.create({
+        model: "claude-sonnet-4-6",
+        max_tokens: 4096,
+        messages: [{
+          role: "user",
+          content: [
+            imageSource,
+            { type: "text", text: prompt }
+          ]
+        }]
+      });
+
+      const raw = (message.content[0] as { type: string; text: string }).text;
+      // Strip markdown code fences if present
+      const cleaned = raw.replace(/^```json\n?|^```\n?|```$/gm, "").trim();
+      const parsed = JSON.parse(cleaned);
+      res.json({ ok: true, data: parsed });
+    } catch (err: unknown) {
+      console.error("interpret-plan error:", err);
+      const msg = err instanceof Error ? err.message : String(err);
+      res.status(500).json({ error: msg });
+    }
+  });
+}
+
+// ── Crown Plan Interpretation (vision AI) ─────────────────────────────────────

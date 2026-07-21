@@ -584,7 +584,13 @@ export default function CompiledSurveyPage() {
   const { toast } = useToast();
 
   // Plan reference
-  const [planRef, setPlanRef] = useState("");
+  const [planRef, setPlanRef] = useState(() => {
+    try {
+      const stored = localStorage.getItem("compiledPlanRef");
+      if (stored) { localStorage.removeItem("compiledPlanRef"); return stored; }
+    } catch {}
+    return "";
+  });
   const [planImageUrl, setPlanImageUrl] = useState<string | null>(null);
   const [showPlan, setShowPlan] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -601,7 +607,17 @@ export default function CompiledSurveyPage() {
   const [rotSign, setRotSign] = useState<"+" | "-">("+");
 
   // Lines
-  const [lines, setLines] = useState<Line[]>([newLine()]);
+  const [lines, setLines] = useState<Line[]>(() => {
+    try {
+      const stored = localStorage.getItem("compiledLines");
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        localStorage.removeItem("compiledLines");
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed as Line[];
+      }
+    } catch {}
+    return [newLine()];
+  });
 
   // Active tab
   const [activeTab, setActiveTab] = useState<"lines" | "diagram" | "results">("lines");
