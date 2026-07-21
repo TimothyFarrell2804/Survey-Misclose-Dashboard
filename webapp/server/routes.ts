@@ -131,15 +131,20 @@ export function registerRoutes(httpServer: Server, app: Express) {
       if (!req.file) return res.status(400).json({ error: "No file uploaded" });
 
       const client = new Anthropic();
-      const mime = req.file.mimetype as "image/jpeg" | "image/png" | "image/gif" | "image/webp";
       const b64 = req.file.buffer.toString("base64");
 
       // For PDFs, use document type; for images use image type
       const isPdf = req.file.mimetype === "application/pdf";
+      if (isPdf) {
+        // PDF support requires claude-3-5-sonnet with beta header — use image path for now
+        return res.status(400).json({ error: "PDF upload is not yet supported. Please convert your plan to a JPG or PNG image and re-upload." });
+      }
 
-      const imageSource = isPdf
-        ? { type: "document" as const, source: { type: "base64" as const, media_type: "application/pdf" as const, data: b64 } }
-        : { type: "image" as const, source: { type: "base64" as const, media_type: mime, data: b64 } };
+      // Normalise MIME type — some browsers send image/jpg instead of image/jpeg
+      const rawMime = req.file.mimetype;
+      const safeMime = (rawMime === "image/jpg" ? "image/jpeg" : rawMime) as "image/jpeg" | "image/png" | "image/gif" | "image/webp";
+
+      const imageSource = { type: "image" as const, source: { type: "base64" as const, media_type: safeMime, data: b64 } };
 
       const prompt = `You are an expert Australian land surveyor specialising in NSW Crown portion plans. 
 Carefully examine this Crown portion plan image and extract ALL survey data visible.
@@ -189,9 +194,14 @@ Return ONLY the JSON, no other text.`;
       });
 
       const raw = (message.content[0] as { type: string; text: string }).text;
-      // Strip markdown code fences if present
-      const cleaned = raw.replace(/^```json\n?|^```\n?|```$/gm, "").trim();
-      const parsed = JSON.parse(cleaned);
+      console.log("Claude raw response (first 300):", raw.slice(0, 300));
+
+      // Robustly extract JSON — find first { ... } block
+      const jsonMatch = raw.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) {
+        throw new Error("No JSON object found in Claude response. Raw: " + raw.slice(0, 200));
+      }
+      const parsed = JSON.parse(jsonMatch[0]);
       res.json({ ok: true, data: parsed });
     } catch (err: unknown) {
       console.error("interpret-plan error:", err);

@@ -256,10 +256,10 @@ export default function CrownPlanPage() {
             ) : (
               <>
                 <div className="font-semibold text-primary text-sm">Drag & drop plan here</div>
-                <div className="text-xs text-muted-foreground">or tap to browse — JPG, PNG, PDF supported</div>
+                <div className="text-xs text-muted-foreground">or tap to browse — JPG or PNG recommended<br/>PDF: convert to image first</div>
               </>
             )}
-            <input ref={fileInputRef} type="file" accept="image/*,application/pdf" className="hidden" onChange={onInputChange} />
+            <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={onInputChange} />
           </div>
 
           {preview && (
