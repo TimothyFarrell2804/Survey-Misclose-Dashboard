@@ -219,8 +219,8 @@ export default function CrownPlanPage() {
           <div className="flex items-start gap-2">
             <AlertTriangle size={16} className="text-amber-600 mt-0.5 shrink-0" />
             <p className="text-xs text-amber-800 leading-relaxed">
-              AI plan reading works in the <strong>live preview only</strong> — GitHub Pages is a static host
-              and cannot run the vision API. Use the preview link for interpretation.
+              AI plan reading requires a live server — it works in the <strong>preview</strong> and on <strong>Digital Ocean</strong>.
+              PDF plans are converted automatically (first page only). For multi-page plans, upload each page separately.
             </p>
           </div>
         </CardContent>
@@ -256,10 +256,10 @@ export default function CrownPlanPage() {
             ) : (
               <>
                 <div className="font-semibold text-primary text-sm">Drag & drop plan here</div>
-                <div className="text-xs text-muted-foreground">or tap to browse — JPG or PNG recommended<br/>PDF: convert to image first</div>
+                <div className="text-xs text-muted-foreground">or tap to browse — JPG, PNG or PDF (scanned plans)</div>
               </>
             )}
-            <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={onInputChange} />
+            <input ref={fileInputRef} type="file" accept="image/*,application/pdf" className="hidden" onChange={onInputChange} />
           </div>
 
           {preview && (

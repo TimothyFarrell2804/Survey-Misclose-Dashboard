@@ -2,6 +2,10 @@ import type { Express } from "express";
 import type { Server } from "http";
 import multer from "multer";
 import Anthropic from "@anthropic-ai/sdk";
+import fs from "fs";
+import path from "path";
+import os from "os";
+import { execSync } from "child_process";
 import { storage } from "./storage";
 import { insertTraverseSchema, insertLegSchema, insertJoinSessionSchema, insertJoinPointSchema } from "@shared/schema";
 import { z } from "zod";
@@ -135,16 +139,40 @@ export function registerRoutes(httpServer: Server, app: Express) {
 
       // For PDFs, use document type; for images use image type
       const isPdf = req.file.mimetype === "application/pdf";
+      let imageBase64 = b64;
+      let imageMime: "image/jpeg" | "image/png" | "image/gif" | "image/webp" = "image/jpeg";
+
       if (isPdf) {
-        // PDF support requires claude-3-5-sonnet with beta header — use image path for now
-        return res.status(400).json({ error: "PDF upload is not yet supported. Please convert your plan to a JPG or PNG image and re-upload." });
+        // Convert first page of PDF to JPEG using pdftoppm (poppler)
+        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "plan-"));
+        const pdfPath = path.join(tmpDir, "plan.pdf");
+        const outPrefix = path.join(tmpDir, "page");
+        try {
+          fs.writeFileSync(pdfPath, req.file.buffer);
+          // -r 200 = 200 DPI, -jpeg, -singlefile = first page only
+          execSync(`pdftoppm -r 200 -jpeg -singlefile "${pdfPath}" "${outPrefix}"`, { timeout: 30000 });
+          // pdftoppm outputs outPrefix.jpg or outPrefix-1.jpg depending on version
+          let jpgPath = outPrefix + ".jpg";
+          if (!fs.existsSync(jpgPath)) jpgPath = outPrefix + "-1.jpg";
+          if (!fs.existsSync(jpgPath)) {
+            // fallback: find any jpg in tmpDir
+            const files = fs.readdirSync(tmpDir).filter(f => f.endsWith(".jpg") || f.endsWith(".jpeg"));
+            if (files.length === 0) throw new Error("PDF conversion produced no output image");
+            jpgPath = path.join(tmpDir, files[0]);
+          }
+          imageBase64 = fs.readFileSync(jpgPath).toString("base64");
+          imageMime = "image/jpeg";
+        } finally {
+          // Clean up temp files
+          try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
+        }
+      } else {
+        // Normalise MIME type — some browsers send image/jpg instead of image/jpeg
+        const rawMime = req.file.mimetype;
+        imageMime = (rawMime === "image/jpg" ? "image/jpeg" : rawMime) as "image/jpeg" | "image/png" | "image/gif" | "image/webp";
       }
 
-      // Normalise MIME type — some browsers send image/jpg instead of image/jpeg
-      const rawMime = req.file.mimetype;
-      const safeMime = (rawMime === "image/jpg" ? "image/jpeg" : rawMime) as "image/jpeg" | "image/png" | "image/gif" | "image/webp";
-
-      const imageSource = { type: "image" as const, source: { type: "base64" as const, media_type: safeMime, data: b64 } };
+      const imageSource = { type: "image" as const, source: { type: "base64" as const, media_type: imageMime, data: imageBase64 } };
 
       const prompt = `You are an expert Australian land surveyor specialising in NSW Crown portion plans. 
 Carefully examine this Crown portion plan image and extract ALL survey data visible.

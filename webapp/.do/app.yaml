@@ -1,0 +1,31 @@
+name: survey-cogo
+region: syd
+
+services:
+  - name: web
+    github:
+      repo: TimothyFarrell2804/Survey-Misclose-Dashboard
+      branch: main
+      deploy_on_push: true
+    source_dir: webapp
+    dockerfile_path: webapp/Dockerfile
+    http_port: 5000
+    instance_size_slug: apps-s-1vcpu-0.5gb
+    instance_count: 1
+    envs:
+      - key: NODE_ENV
+        value: production
+        scope: RUN_TIME
+      - key: PORT
+        value: "5000"
+        scope: RUN_TIME
+      - key: ANTHROPIC_API_KEY
+        scope: RUN_TIME
+        type: SECRET
+    health_check:
+      http_path: /
+      initial_delay_seconds: 45
+      period_seconds: 30
+      timeout_seconds: 10
+      success_threshold: 1
+      failure_threshold: 3
